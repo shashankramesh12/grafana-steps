@@ -1,0 +1,21 @@
+1. create linux ec2 instance
+2. install prometheus,alertmanaget and node_exporter
+3. unzip the tar files
+4. copy all the prometheus file in /usr/local/bin/prometheus
+5. add pormetheus.service file in /etc/systemd/system/prometheus.service
+6. start prometheus service (port - 9090)
+7. copy only node_exporter file in /usr/local/bin
+8. create node_exporter.service file in /etc/systemd/system/node_exporter.service
+9. reload the system using systemctl daemon-reload
+10 start node_exporter (port - 9100)
+11. copy all the file in alertmanager to /usr/local/bin/alertmanager
+12. create alertmanager.service file in etc/systemd/system/alertmanager.service
+13. Create a repository for grafana installation in /etc/yum.repos.d/grafana.repo
+14. install grafana using yum install grafana -y
+15. start grafana service (port - 3000)
+16. install docker 
+17. create daemon.json file in /etc/docker/daemon.json
+18. now configure prometheus.yml file for all of the above service
+19. configure alert rules in prometheus_rules.yml
+20. edit alertmanager.yml file 
+21. configure smpt in grafana.ini file

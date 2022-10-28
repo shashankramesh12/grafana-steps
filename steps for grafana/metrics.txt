@@ -1,0 +1,102 @@
+1) CPU usage 
+
+Defualt query for cpu usage is:
+node_cpu_seconds_total
+
+specify the job name and instance which we want to monitor:
+{mode="system",instance="$node",job="$job"}
+
+mode=system takes compelete system cpu usage
+mode=idle monitors cpu even when cpu is idle
+mode!= idle monitors cpu only when its not idle
+
+
+apply rate function which gives rate of cpu time rather than just showing how much cpu time there has been since the machine was started:
+rate()
+
+irate(): This function gives interval of time over which we wanted to query data points 
+
+to monitor multiple cpu's use avg without(cpu)
+
+The complete query is:
+(irate(node_cpu_seconds_total{mode="system",instance="$node",job="$job"}[1m]))
+
+The complete query to monitor multiple cpu is
+avg without(cpu) (irate(node_cpu_seconds_total{mode="system",instance="$node",job="$job"}[1m]))
+
+
+Use {{mode}} in legend text box to moniter all the diffrent types of cpu  usage (system, busy user, busy iowait time, busy other, idle)
+
+
+2) Memory usage
+
+Defualt query for memory usage is:
+node_memory_Memtotal_bytes
+
+To track free memory
+node_memory_Memfree_bytes
+
+To track chached memory:
+node_memory_cached_bytes
+
+To track buffers:
+node_memory_buffers_bytes
+
+To track memory used by kernel
+node_memory_SReclaimable_bytes
+
+To track amount of hard drive that is used whenever RAM runs out of memory:
+node_memory_SwapTotal_bytes
+
+The complete query for monitoring system memory is:
+node_memory_Memtotal_bytes{instance="$node",job="$job"} - node_memory_Memfree_bytes{instance="$node",job="$job"} - node_memory_cached_bytes{instance="$node",job="$job"} - node_memory_buffers_bytes{instance="$node",job="$job"}
+
+
+Enter 'used' in legend text box to monitor used memory
+
+3)disk space usage
+
+Defualt query for disk usage is
+node_filesystem_avail_bytes
+
+
+we can configure devices which we don't want to track by:
+device!~"/dev/loop" (not to track loop file system)
+device!~"temp fs | nsfs" (not to track temp file system and name space file system)
+
+
+To subtract total bytes from avail bytes query is:
+node_filesystem_size_bytes{instance="$node",job="$job",device!~"/dev/loop",device!~"temp fs | nsfs"} - node_filesystem_avail_bytes{instance="$node",job="$job"}
+
+
+4) network traffic monitoring
+
+Defualt query for tracking incoming network traffic is:
+node_network_receive_bytes_total
+
+Defualt query for tracking transmited network is:
+node_network_transmit_bytes_total 
+
+the complete query fot incoming network traffic is:
+node_network_receive_bytes_total{instance="$node",job="$job"} 
+
+
+the complete query for tracking transmited network is:
+node_network_transmit_bytes_total{instance="$node",job="$job"} 
+
+
+alerting metrics
+
+1) cpu 
+sum by (cpu) (rate(node_cpu_seconds_total{mode!="idle"}[1m]))
+
+2) memory
+node_memory_Active_bytes/node_memory_MemTotal_bytes*100
+
+3) disk space
+node_filesystem_avail_bytes/node_filesystem_size_bytes*100
+
+4) network
+
+
+

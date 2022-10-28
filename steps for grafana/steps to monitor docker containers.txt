@@ -1,0 +1,4 @@
+1) launch 3 ec2 linux instance
+2) install docker and initialize docker swarmt 
+3) clone the git repository from 
+4) docker stack deploy -c docker-compose.yml < stack_name >

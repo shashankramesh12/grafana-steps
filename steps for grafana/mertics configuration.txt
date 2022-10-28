@@ -1,0 +1,324 @@
+1) pom.xml
+<dependency>
+  <groupId>org.springframework.metrics</groupId>
+  <artifactId>spring-metrics</artifactId>
+  <version>${metrics.version}</version>
+</dependency>
+
+2) Enable metrics in your Spring Boot application with @EnablePrometheusMetrics:
+
+@SpringBootApplication
+@EnablePrometheusMetrics
+public class MyApp {
+}
+
+@RestController
+@Timed
+class PersonController {
+    Map<Integer, Person> people = new Map<Integer, Person>();
+
+    public PersonController(MeterRegistry registry) {
+        // constructs a gauge to monitor the size of the population
+        registry.mapSize("population", people);
+    }
+
+    @GetMapping("/api/people")
+    public List<Person> listPeople() {
+        return people;
+    }
+
+    @GetMapping("/api/person/")
+    public Person findPerson(@PathVariable Integer id) {
+        return people.get(id);
+    }
+}
+
+3) Dimensions/Tags
+Suppose we are trying to measure the number of threads in a thread pool and the number of rows in a database table.
+
+Recommended approach
+registry.counter("threadpool_size", "id", "server_requests")
+registry.counter("db_size", "table", "users")
+
+This variant provides enough context so that if just the name is selected the value can be reasoned about
+and is at least potentially meaningful. For example if we select threadpool_size we can see the total number of threads
+in all pools. Then we can group by or select an id to drill down further or perform comparative analysis on the contribution
+of each functional area to the number of threads consumed by the instrumented app.
+
+4) Bad approach
+registry.counter("size",
+    "class", "ThreadPool",
+    "id", "server_requests");
+
+registry.counter("size",
+    "class", "Database",
+    "table", "users");
+In this approach, if we select size we will get a value that is an aggregate of the number of threads and the number of items in a database. This time series is not useful without further dimensional drill-down.
+
+5) CounterS
+The following code simulates a real counter whose rate exhibits some perturbation over a short time window.
+
+RandomEngine r = new MersenneTwister64(0);
+Normal dist = new Normal(0, 1, r);
+
+MeterRegistry registry = ...
+Counter counter = registry.counter("counter");
+
+Flux.interval(Duration.ofMillis(10))
+        .doOnEach(d -> {
+            if (dist.nextDouble() + 0.1 > 0) {
+                counter.increment();
+            }
+        })
+        .blockLast();
+
+6) TIMER
+
+
+public interface Timer extends Meter {
+    ...
+    void record(long amount, TimeUnit unit);
+    double totalTime(TimeUnit unit);
+}
+
+The Prometheus Timer produces two counter time series with different names:
+
+${name}_count - Total number of all calls.
+${name}_sum - Total time of all calls.
+For the same reasons cited in the Counters section, it is generally most useful to rate normalize these time series 
+to reason about them. SincA gauge is a handle to get the current value. Typical examples for gauges would be the size of a collection or map or number of threads in a running state.e Prometheus keeps track of discrete events across all time, it has the advantage of allowing for
+the selection of an arbitrary time window across which to normalize at query time (e.g. rate(timer_count[10s]) provides 
+a notion of requests per second over 10 second windows).
+
+
+
+7) long taks timer_count
+
+In a Spring application, it is common for such long running processes to be implemented with @Scheduled. spring-metrics provides a special @Timed annotation for instrumenting these processes with a long task timer:
+
+@Timed(value = "aws_scrape", longTask = true)
+@Scheduled(fixedDelay = 360000)
+void scrapeResources() {
+    // find instances, volumes, auto-scaling groups, etc...
+}
+
+8) Gauges
+
+Different from other meters, Gauges should only report data when observed. Gauges can be useful when monitoring stats 
+of cache or collections:
+
+SimpleMeterRegistry registry = new SimpleMeterRegistry();
+List<String> list = new ArrayList<>(4);
+
+Gauge gauge = Gauge
+  .builder("cache.size", list, List::size)
+  .register(registry);
+
+assertTrue(gauge.value() == 0.0);
+ 
+list.add("1");
+ 
+assertTrue(gauge.value() == 1.0);
+
+A gauge is a handle to get the current value. Typical examples for gauges would be the size of a collection 
+or map or number of threads in a running state.
+
+9)Distribution Summary
+distribution summary could be used to measure the payload sizes of requests hitting a server
+
+10) Quantile Statistics
+Timers and distribution summaries can be enriched with quantiles computed in your app prior to shipping to a monitoring backend.
+
+Timer timer = meterRegistry.timerBuilder("my_timer")
+                .quantiles(WindowSketchQuantiles.quantiles(0.5, 0.95).create())
+                .create();
+For distribution summaries, you can use summaryBuilder(name) which mirrors this construction.
+
+This would result in additional gauges with tags quantile=0.5 and quantile=0.95. The 0.95 quantile is the the value below which 95% of observations in a group of observations fall. 0.5 represents the media of our observations thus far.
+
+It is also possible to indicate that you want to compute quantiles in an @Timed annotation:
+
+@RestController
+public class MyController {
+    @Timed(value = "list_people", quantiles = {0.5, 0.95})
+    @GetMapping("/api/people")
+    public List<Person> listPeople() { ... }
+Four quantile algorithms are provided out of the box with different tradeoffs:
+
+WindowSketchQuantiles - The importance of an observation is decayed as it ages. This is the most computationally costly algorithm.
+WindowSketchQuantiles.quantiles(0.5, 0.95)
+    .error(0.01) // OPTIONAL, defaults to 0.05
+    .create()
+Frugal2UQuantiles - Successive approximation algorithm that converges towards the true quantile with enough observations. 
+This is by least costly algorithm, but exhibits a higher error ratio in early observations.
+Frugal2UQuantiles
+    // the closer the initial estimate (100) is to the true quantile, the faster it converges
+    .quantile(0.95, 100)
+    .quantile(0.5, 150)
+    .create()
+CKMSQuantiles - Allows you to tradeoff computational complexity for error ratio on a per quantile basis. Often, it is desirable for higher quantiles to have a lower error ratio (e.g. 0.99 at 1% error vs. 0.5 at 5% error). Still more computationally expensive than Frugal.
+CKMSQuantiles
+    .quantile(0.95, 0.01)
+    .quantile(0.5, 0.05)
+    .create()
+GKQuantiles - Allows you to tradeoff computational complexity for error ratio across all quantiles. This is used inside of WindowSketchQuantiles.
+GKQuantiles.quantiles(0.5, 0.95)
+    .error(0.01) // OPTIONAL, defaults to 0.05
+    .create()
+	
+9) Histogram Statistics
+Timers and distribution summaries can be enriched with histogram statistics that yield a counter time series for each of a set of buckets.
+
+Histograms can be used to compute quantiles or other summary statistics in some monitoring backends (e.g. Prometheus).
+Because histograms buckets are exposed as individual counters to the monitoring backend, it is possible to aggregate
+observations across a distributed system and compute summary statistics like quantiles for an entire cluster.
+
+Naturally, the error rate of the computed summary statistic will be higher because of the lossy nature of bucketing data.
+
+spring-metrics supports both cumulative and non-cumulative (normal) histograms and provides a set of generators for each.
+
+DistributionSummary hist = meterRegistry.summaryBuilder("hist")
+        .histogram(CumulativeHistogram.buckets(linear(0, 10, 20)))
+        .create();
+For timers, you can use timerBuilder(name) which mirrors this construction.
+
+This sample constructs a cumulative histogram consisting of 20 buckets, one every 10 units beginning at 0.
+
+To construct a normal histogram, use the generators on NormalHistogram.
+
+For timers, be sure to specify the TimeUnit that your buckets represent. The bucket tag value on the time series will be normalized to the expected time base unit of the monitoring backend (e.g. seconds on Prometheus, nanoseconds on Atlas). In this way, you can keep your histograms backend agnostic.
+
+CumulativeHistogram.buckets(linear(0, 10, 20), TimeUnit.MILLISECONDS);
+
+11) Cache Monitoring
+Guava caches can be instrumented with the registry, but it is important that you call recordStats() on the CacheBuilder, as it is not possible to turn this on after the Cache is constructed.
+
+@Repository
+class PersonRepository {
+    LoadingCache<String, Person> personBySsn;
+
+    public PersonRepository(MeterRegistry registry) {
+        personBySsn = Meters.monitor(registry, CacheBuilder.newBuilder().recordStats().build(),
+            "people_cache", // base metric name
+            "lookup_key", "ssn" // <- any number of tag key/value pairs
+        );
+    }
+}
+Cache instrumentation results in several gauges whose names are prefixed by the provided name ("people_cache" in this example), corresponding to the stats recorded in CacheStats.
+
+The original cache instance is unchanged by instrumentation.
+
+12) Data Source Monitoring
+Data sources can be instrumented with the registry. 
+This requires the DataSourcePoolMetadataProvider automatically configured by Spring Boot, so only works in a Spring Boot
+context where these providers are configured.
+
+@Configuration
+class MyConfiguration {
+    @Autowired
+    private DataSource dataSource;
+
+    @Autowired
+    private Collection<DataSourcePoolMetadataProvider> metadataProviders;
+
+    @Autowired
+    private Environment env;
+
+    @PostConstruct
+    private void instrumentDataSource() {
+        Meters.monitor(
+            registry,
+            dataSource,
+            metadataProviders,
+            "data_source", // base metric name
+            "stack", env.acceptsProfiles("prod") ? "prod" : "test", // <- any number of tags
+        );
+    }
+}
+Data source instrumentation results in gauges representing the currently active, maximum allowed, and minimum allowed connections 
+in the pool. Each of these gauges has a name which is prefixed by the provided name ("data_source" in this example).
+
+The original data source instance is unchanged by instrumentation.
+
+13) Executor and ExecutorService Monitoring
+Executor and ExecutorService instances can be instrumented with the registry.
+This includes any specializations of these types created by java.util.concurrent.Executors. Additionally, 
+you can directly monitor ThreadPoolTaskExecutor and ThreadPoolTaskScheduler in a wholly similar way,
+but they must be initialized prior to attempting to instrument them.
+
+@Configuration
+class MyConfiguration {
+    @Bean("worker_pool")
+    ExecutorService workerPool(MeterRegistry registry) {
+        return Meters.monitor(registry,
+            Executors.newFixedThreadPool(8),
+            "worker_pool",
+            "threads", "8" // any number of tag key value pairs
+        );
+    }
+}
+ExecutorService instrumentation results in a composite counter that tracks the number of submitted, active, and completed tasks.
+Additionally, a timer records the execution time of tasks (plus a count of such tasks, since Timers always track 
+both count and totalTime statistics).
+
+Executor instrumentation just records the execution time.
+
+14)Webflux Functional
+spring-metrics contains a filter that you can add to a RouterFunction to instrument timings to its routes.
+
+RouterFunctionMetrics metrics = new RouterFunctionMetrics(registry);
+
+// OPTIONAL: the default is to record tags on method and status
+metrics.defaultTags((req, resp) -> { /* custom tags here */ });
+
+RouterFunction<ServerResponse> routes = RouterFunctions
+    .route(GET("/person/").and(accept(APPLICATION_JSON)),
+        request -> ServerResponse.ok().build())
+    .filter(metrics.timer(
+        "http_server_requests", // metric name
+        "instance", MY_INSTANCE_ID // optional tags
+    ));
+The filter applies to all routes defined by this router function.
+
+Separately, a router function generator is provided to add a scraping endpoint to a Webflux functional application:
+
+PrometheusMeterRegistry meterRegistry = new PrometheusMeterRegistry();
+RouterFunction<ServerResponse> route = route(GET("/prometheus"),
+    PrometheusFunctions.scrape(meterRegistry));
+You can compose this router function with another router function(s) that are instrumented with metrics.
+
+
+15) Client-side HTTP Instrumentation
+Enabling metrics in your Spring Boot application configures a BeanPostProcessor for RestTemplate, 
+so every instance you create via the application context will be instrumented.
+
+A timer is recorded for each invocation that includes tags for URI (before parameter substitution), host, and status.
+The name of this timer is http_client_requests, and can be changed via the spring.metrics.web.client_requests.name property.
+
+
+16) Scheduling Instrumentation
+Enabling metrics in your Spring Boot application plus enabling AOP configures AOP advice that times @Scheduled methods. For a method to be timed, it must be marked as @Timed("my_metric_name") with a name.
+
+Depending on the duration of the scheduled task, you may want to choose to time the method with a LongTaskTimer, a Timer, or both. Below is an example of measuring both long task and regular timings to a scheduled task:
+
+@Timed("beep")
+@Timed(value = "long_beep", longTask = true)
+@Scheduled(fixedRate = 1000)
+void longBeep() {
+    // calculate the meaning of life, then beep...
+    System.out.println("beep");
+}
+
+17) Binders
+The Micrometer has multiple built-in binders to monitor the JVM, caches, ExecutorService, and logging services.
+
+When it comes to JVM and system monitoring, we can monitor class loader metrics (ClassLoaderMetrics), JVM memory pool
+(JvmMemoryMetrics) and GC metrics (JvmGcMetrics), and thread and CPU utilization (JvmThreadMetrics, ProcessorMetrics).
+
+Cache monitoring (currently, only Guava, EhCache, Hazelcast, and Caffeine are supported) is supported by instrumenting with 
+GuavaCacheMetrics, EhCache2Metrics, HazelcastCacheMetrics, and CaffeineCacheMetrics. And to monitor log back service,
+we can bind LogbackMetrics to any valid registry:
+
+
+Note - refer https://www.baeldung.com/micrometer
+
